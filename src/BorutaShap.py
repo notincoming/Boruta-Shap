@@ -14,6 +14,7 @@ import numpy as np
 from numpy.random import choice
 import seaborn as sns
 import shap
+import sage
 import os
 import re
 
@@ -28,8 +29,9 @@ class BorutaShap:
 
     """
 
-    def __init__(self, model=None, importance_measure='Shap',
-                classification=True, percentile=100, pvalue=0.05):
+    def __init__(self, model=None, importance_measure='sage-shap',
+                classification=False, percentile=100, pvalue=0.05,
+                 process_id=None, message_queue=None, data_queue=None):
 
         """
         Parameters
@@ -61,8 +63,17 @@ class BorutaShap:
         self.classification = classification
         self.model = model
         self.check_model()
+        self.process_id = process_id
+        self.message_queue = message_queue
+        self.data_queue = data_queue
 
+    def message_if_available(self, message):
+        if self.message_queue:
+            self.message_queue.put(message)
 
+    def send_data_if_available(self, data):
+        if self.data_queue:
+            self.data_queue.put(data)
     def check_model(self):
 
         """
@@ -261,7 +272,7 @@ class BorutaShap:
 
 
     def fit(self, X, y, sample_weight = None, n_trials = 20, random_state=0, sample=False,
-            train_or_test = 'test', normalize=True, verbose=True, stratify=None):
+            train_or_test = 'test', normalize=True, verbose=False, stratify=None):
 
         """
         The main body of the program this method it computes the following
@@ -356,8 +367,9 @@ class BorutaShap:
 
         if self.sample: self.preds = self.isolation_forest(self.X, self.sample_weight)
 
-        for trial in tqdm(range(self.n_trials)):
-
+        for trial in range(self.n_trials):
+            self.message_if_available(
+                'Boruta of {} with progress {}%'.format(self.process_id, trial / self.n_trials * 100))
             self.remove_features_if_rejected()
             self.columns = self.X.columns.to_numpy()
             self.create_shadow_features()
@@ -376,6 +388,26 @@ class BorutaShap:
                 self.hits += hits
                 self.history_hits = np.vstack((self.history_hits, self.hits))
                 self.test_features(iteration=trial+1)
+
+            save_state = {
+                'hits': self.hits,
+                'history_hits': self.history_hits,
+                'history_shadow': self.history_shadow,
+                'history_x': self.history_x,
+                'all_columns': self.all_columns,
+                'columns': self.columns,
+                'features_to_remove': self.features_to_remove,
+                'rejected_columns': self.rejected_columns,
+                'accepted_columns': self.accepted_columns,
+                'order': self.order,
+                'trials_passed': trial,
+                'starting_X': self.starting_X
+            }
+            data_to_send = {
+                'data': save_state,
+                'name': self.process_id
+            }
+            self.send_data_if_available(data_to_send)
 
         self.store_feature_importance()
         self.calculate_rejected_accepted_tentative(verbose=verbose)
@@ -612,8 +644,17 @@ class BorutaShap:
             ValueError:
                 If no Importance measure was specified
         """
+        if self.importance_measure == 'sage-shap':
+            self.explain_sage_shap()
+            vals = self.sage_shap_values.values
 
-        if self.importance_measure == 'shap':
+            if normalize:
+                vals = self.calculate_Zscore(vals)
+
+            X_feature_import = vals[:len(self.X.columns)]
+            Shadow_feature_import = vals[len(self.X_shadow.columns):]
+
+        elif self.importance_measure == 'shap':
 
             self.explain()
             vals = self.shap_values
@@ -642,6 +683,21 @@ class BorutaShap:
 
         return X_feature_import, Shadow_feature_import
 
+    def explain_sage_shap(self):
+        if self.train_or_test == 'test':
+            self.X_boruta_train.reset_index(drop=True, inplace=True)
+            self.X_boruta_test.reset_index(drop=True, inplace=True)
+            self.y_test.reset_index(drop=True, inplace=True)
+            imputer = sage.MarginalImputer(self.model, self.X_boruta_train)
+            estimator = sage.PermutationEstimator(imputer, 'mse', process_id=self.process_id, message_queue=self.message_queue)
+            self.sage_shap_values = estimator(self.X_boruta_test, self.y_test, thresh=0.025)
+        else:
+            self.X_boruta.reset_index(drop=True, inplace=True)
+            y_boruta = self.y.copy().reset_index(drop=True, inplace=True)
+            imputer = sage.MarginalImputer(self.model, self.X_boruta)
+            estimator = sage.PermutationEstimator(imputer, 'mse', process_id=self.process_id,
+                                                  message_queue=self.message_queue)
+            self.sage_shap_values = estimator(self.X_boruta, y_boruta, thresh=0.025)
 
     @staticmethod
     def isolation_forest(X, sample_weight):
