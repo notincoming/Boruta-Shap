@@ -7,11 +7,11 @@ def readme():
 
 setup(
     name="BorutaShap",
-    version="1.0.14",
+    version="1.0.15",
     description="A feature selection algorithm.",
     long_description=readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/Ekeany/Boruta-Shap",
+    url="https://github.com/notincoming/Boruta-Shap/",
     author="Eoghan Keany",
     author_email="egnkeany@gmail.com",
     license="MIT",
@@ -24,6 +24,6 @@ setup(
     package_dir = {"" : "src"},
     install_requires=["scikit-learn","tqdm",
                       "statsmodels","matplotlib",
-                      "pandas","numpy","shap>=0.34.0","seaborn",
-                      "scipy"],
+                      "pandas","numpy","shap==0.34.0","seaborn",
+                      "scipy", "sage-importance @ git+https://github.com/notincoming/sage.git"],
 )
